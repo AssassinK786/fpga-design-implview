@@ -1,0 +1,10 @@
+implview_plus
+
+Based on fpga-design-implview by Rocco Ardino
+(https://github.com/rardino/fpga-design-implview), MIT License, see LICENSE.
+The additions (detail export, module tree, nets and routes, LUT equations,
+crosscheck, nextpnr import) are also under the MIT License.
+
+The feature list was inspired by the description of "View Implemented Design
+(FPGA)" in the Silinx project README. No Silinx code, styles or structure are
+used.
