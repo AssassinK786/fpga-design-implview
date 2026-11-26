@@ -196,6 +196,7 @@ def _detail(design, dev, lay, pk, q, kof, pos):
     for (c, pin), ni in pin_nets.items():
         cell_pins.setdefault(c, []).append((pin, ni))
     cells = {}
+    eq_cache = {}                       # (INIT, inputs) -> equation; LUTs repeat a lot
     for c, k in kof.items():
         cell = design.cells[c]
         props = dict(design.detail.get(c, {}))
@@ -206,7 +207,10 @@ def _detail(design, dev, lay, pk, q, kof, pos):
             try:
                 init, _ = parse_init(props["INIT"])
                 pm = parse_pinmap(props.get("PINMAP", ""))
-                d["eq"] = equation(init, n)
+                key = (init, n)
+                if key not in eq_cache:
+                    eq_cache[key] = equation(init, n)
+                d["eq"] = eq_cache[key]
                 d["pm"] = {f"I{i}": f"A{a}" for i, a in sorted(pm.items())}
             except ValueError:
                 pass
@@ -391,7 +395,7 @@ code.tcl { display: block; margin-top: 6px; padding: 6px 8px; font: 11px/1.4 ui-
 .det code { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); word-break: break-all; }
 .det .nl { color: var(--accent); cursor: pointer; border-bottom: 1px dotted var(--accent); }
 .det .nl.clk { color: var(--fail); border-color: var(--fail); }
-.mlink { color: var(--accent); cursor: pointer; }
+.mlink { color: var(--accent); cursor: pointer; word-break: break-all; }
 @media (max-width: 760px) {
   #app { flex-direction: column; }
   #view { height: 65vh; flex: none; }
@@ -918,16 +922,24 @@ function pathDetail() {
   $("ptcl").onclick = () => copyTcl(p);
   $("pclr").onclick = () => selectPath(-1);
 }
+// sites to highlight: the selected net, else the selected path (one state for both,
+// so clearing one selection keeps the other's highlight)
+function netSites(n) {
+  const net = NETS[n], sites = new Set();
+  if (net[4] >= 0) sites.add(cellSite(net[4]));
+  for (const k of net[5]) sites.add(cellSite(k));
+  return sites;
+}
+function updateHighlight() {
+  const sites = nsel >= 0 ? netSites(nsel) : psel >= 0 ? P[psel].sites : null;
+  onPath = null;
+  if (sites) { onPath = new Uint8Array(N); for (const i of sites) onPath[i] = 1; }
+}
 function selectPath(j, zoom = true) {
   psel = j;
-  onPath = null;
   if (j >= 0 && nsel >= 0) { nsel = -1; $("ndet").innerHTML = ""; }
-  if (j >= 0) {
-    const p = P[j];
-    onPath = new Uint8Array(N);
-    for (const i of p.sites) onPath[i] = 1;
-    pcheck = p.k;
-  }
+  if (j >= 0) pcheck = P[j].k;
+  updateHighlight();
   pathPanel(); rebuild();
   if (j >= 0 && zoom) fitPath(P[j]);
   const row = $("plist").querySelector(".prow.on");
@@ -1090,13 +1102,10 @@ function selectNet(n, zoom = true) {
   nsel = n;
   const box = $("ndet");
   setHash("net", n >= 0 ? NETS[n][0] : null);
-  if (n < 0) { box.innerHTML = ""; onPath = null; rebuild(); netSearch(); return; }
+  updateHighlight();
+  if (n < 0) { box.innerHTML = ""; rebuild(); netSearch(); return; }
   const net = NETS[n];
-  onPath = new Uint8Array(N);
-  const sites = new Set();
-  if (net[4] >= 0) sites.add(cellSite(net[4]));
-  for (const k of net[5]) sites.add(cellSite(k));
-  for (const i of sites) onPath[i] = 1;
+  const sites = netSites(n);
   const route = ["not routed", "routed", "routed (route not exported: over the --nets cap)"][net[3]];
   let h = `<h2>Net</h2><b style="word-break:break-all">${esc(net[0])}</b><div class="kv">` +
     `<span>Type</span><span>${esc(net[1])}</span><span>Fanout</span><span>${net[2]}</span>` +

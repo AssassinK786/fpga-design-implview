@@ -196,3 +196,17 @@ def test_compare_pips_and_luts(tmp_path, detailed):
     assert rep["pips"]["vivado_found_in_fasm_pct"] == 100.0
     # lut0 (I0 on A3, INIT = I0): in FASM nothing -> a mismatch is reported
     assert rep["lut_init"]["compared"] >= 1 and rep["lut_init"]["mismatches"]
+
+
+def test_find_db_needs_a_root(monkeypatch):
+    from fpga_design_implview.crosscheck import find_db
+    monkeypatch.delenv("IMPLVIEW_PRJXRAY_DB", raising=False)
+    assert find_db("artix7", "xc7a35tcsg324-1") == (None, None)
+
+
+def test_bit2fasm_without_command_is_a_crosscheck_error(monkeypatch, tmp_path):
+    import pytest
+    from fpga_design_implview.crosscheck import CrosscheckError, bit2fasm
+    monkeypatch.delenv("IMPLVIEW_BIT2FASM", raising=False)
+    with pytest.raises(CrosscheckError):
+        bit2fasm("x.bit", str(tmp_path), "xc7a35tcsg324-1", str(tmp_path))

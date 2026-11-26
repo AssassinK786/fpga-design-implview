@@ -27,10 +27,9 @@ from collections import defaultdict
 
 from .lut import lut_inputs, parse_init, parse_pinmap, physical_init
 
-DB_ROOTS = ("~/tools/prjxray-db", "~/fpga-toolchain/f4pga-xc-fasm2bels/third_party/prjxray-db",
-            "~/openxc7_tools/prjxray-db", "~/fpga-toolchain/prjxray/database",
-            "~/fpga-toolchain/prjxray-openxc7/database")
-OPENXC7 = "~/tools/openxc7"           # unpacked openXC7 (bitread, python3.8, prjxray)
+
+class CrosscheckError(Exception):
+    """A missing tool or database, or a failed bit2fasm run (reported without a traceback)."""
 
 
 # ---- database and bit2fasm
@@ -44,10 +43,8 @@ def find_db(arch, part, root=None):
         spd = spd or "-1"
         for s in (spd, re.sub(r"[A-Za-z]+$", "", spd), "-1"):
             cands.append(f"{dev}{pkg}{s}")
-    roots = [root] if root else [os.environ.get("IMPLVIEW_PRJXRAY_DB")] + list(DB_ROOTS)
-    for r in roots:
-        if not r:
-            continue
+    r = root or os.environ.get("IMPLVIEW_PRJXRAY_DB")
+    if r:
         fam = os.path.join(os.path.expanduser(r), arch)
         for c in dict.fromkeys(cands):
             if os.path.isdir(os.path.join(fam, c)):
@@ -55,36 +52,16 @@ def find_db(arch, part, root=None):
     return None, None
 
 
-def _openxc7_cmd(work):
-    """bit2fasm through the unpacked openXC7 install (its own loader and python)."""
-    o = os.path.expanduser(OPENXC7)
-    if not os.path.exists(os.path.join(o, "usr/bin/bitread")):
-        return None, None
-    run = f"/lib64/ld-linux-x86-64.so.2 --library-path {o}/usr/lib/x86_64-linux-gnu:{o}/usr/lib"
-    wrap = os.path.join(work, "bitread_w")
-    with open(wrap, "w") as f:
-        f.write(f'#!/bin/sh\nexec {run} {o}/usr/bin/bitread "$@"\n')
-    os.chmod(wrap, 0o755)
-    env = dict(os.environ, PYTHONHOME=f"{o}/usr",
-               PYTHONPATH=f"{o}/opt/prjxray:{o}/lib/python3.8/site-packages")
-    cmd = shlex.split(run) + [f"{o}/usr/bin/python3.8", f"{o}/opt/prjxray/utils/bit2fasm.py",
-                              "--bitread", wrap]
-    return cmd, env
-
-
 def bit2fasm(bit, fam, dbpart, work):
     """FASM text of a bitstream. $IMPLVIEW_BIT2FASM is a command taking
     --db-root/--part/<bit> (e.g. `python3 .../bit2fasm.py --bitread bitread`)."""
-    if os.environ.get("IMPLVIEW_BIT2FASM"):
-        cmd, env = shlex.split(os.environ["IMPLVIEW_BIT2FASM"]), None
-    else:
-        cmd, env = _openxc7_cmd(work)
-    if not cmd:
-        raise RuntimeError("bit2fasm not found: set IMPLVIEW_BIT2FASM")
+    if not os.environ.get("IMPLVIEW_BIT2FASM"):
+        raise CrosscheckError("bit2fasm not found: set IMPLVIEW_BIT2FASM")
+    cmd = shlex.split(os.environ["IMPLVIEW_BIT2FASM"])
     p = subprocess.run(cmd + ["--db-root", fam, "--part", dbpart, bit], capture_output=True,
-                       text=True, env=env)
+                       text=True)
     if p.returncode != 0:
-        raise RuntimeError(f"bit2fasm failed: {p.stderr[-2000:]}")
+        raise CrosscheckError(f"bit2fasm failed: {p.stderr[-2000:]}")
     return p.stdout
 
 

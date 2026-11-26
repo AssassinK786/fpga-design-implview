@@ -2,7 +2,7 @@
 # design open (a routed checkpoint, or the implemented design at the end of a
 # build) and call:
 #
-#   implview::export_all <dir> ?-routing? ?-paths N?    design and device into <dir>
+#   implview::export_all <dir> ?-routing? ?-paths N? ?-detail ?-nets N??  design and device into <dir>
 #   implview::export_design design.ivd.gz ?-routing? ?-paths N?
 #   implview::export_device device.ivdev.gz
 #
@@ -235,7 +235,7 @@ proc ::implview::export_design {path args} {
     }
 
     if {$detail} {
-        if {[catch {_detail $f $cells $maxnets} msg]} {
+        if {[catch {_detail $f $cells $maxnets $npaths} msg]} {
             puts "implview: warning: detail export incomplete: $msg"
         }
     }
@@ -292,16 +292,21 @@ variable ::implview::props {
 
 proc ::implview::_kv {k v} { return "$k=[_esc $v]" }
 
-proc ::implview::_detail {f cells maxnets} {
+proc ::implview::_detail {f cells maxnets npaths} {
     variable props
     set t0 [clock milliseconds]
     set cidx [dict create]
     set i 0
     foreach c $cells { dict set cidx $c $i; incr i }
 
-    # cells grouped by PRIMITIVE_GROUP, properties read in bulk per group
+    # cells grouped by PRIMITIVE_GROUP, properties read in bulk per group. LUTs
+    # go by REF_NAME: their PRIMITIVE_GROUP is LUT on 7 series but CLB on
+    # UltraScale, UltraScale+ and Versal.
     set bygroup [dict create]
-    foreach c $cells g [get_property PRIMITIVE_GROUP $cells] { dict lappend bygroup $g $c }
+    foreach c $cells g [get_property PRIMITIVE_GROUP $cells] r [get_property REF_NAME $cells] {
+        if {[regexp {^LUT[1-6]$} $r]} { set g LUT }
+        dict lappend bygroup $g $c
+    }
     set nc 0
     dict for {g cs} $bygroup {
         set rec [dict create]
@@ -313,7 +318,8 @@ proc ::implview::_detail {f cells maxnets} {
             # BLOCKRAM, CLK or CLOCK, ...)
             set alias {BMEM BLOCKRAM BLOCKRAM BLOCKRAM URAM BLOCKRAM CLK CLOCK CLOCK CLOCK
                        ARITHMETIC ARITHMETIC DSP ARITHMETIC IO IO FLOP_LATCH FLOP_LATCH
-                       REGISTER REGISTER DMEM DMEM SRL DMEM}
+                       REGISTER REGISTER DMEM DMEM SRL DMEM MULT ARITHMETIC I/O IO
+                       CLB DMEM}
             if {[dict exists $alias $g]} {
                 set pg [dict get $alias $g]
                 set keys [expr {$pg eq "DMEM" ? {INIT} : [dict get $props $pg]}]
@@ -354,11 +360,12 @@ proc ::implview::_detail {f cells maxnets} {
             -filter {TYPE != POWER && TYPE != GROUND}]
     set first [dict create]
     foreach n [filter -quiet $all {TYPE =~ *CLOCK*}] { dict set first $n 1 }
-    foreach p [get_timing_paths -quiet -max_paths 50 -nworst 1 -setup] {
-        foreach n [get_nets -quiet -of_objects $p] { dict set first $n 1 }
-    }
-    foreach p [get_timing_paths -quiet -max_paths 50 -nworst 1 -hold] {
-        foreach n [get_nets -quiet -of_objects $p] { dict set first $n 1 }
+    if {$npaths > 0} {
+        foreach check {-setup -hold} {
+            foreach p [get_timing_paths -quiet -max_paths $npaths -nworst 1 $check] {
+                foreach n [get_nets -quiet -of_objects $p] { dict set first $n 1 }
+            }
+        }
     }
     set ordered {}
     dict for {n _} $first {

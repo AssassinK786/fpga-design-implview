@@ -7,6 +7,7 @@ import sys
 import time
 
 from . import __version__, cache, quartus, vivado
+from .crosscheck import CrosscheckError
 from .dcp import dcp_info, find_dcp
 from .design import load_design
 from .device import load_device
@@ -73,11 +74,10 @@ def export(a, src):
     dkey = [f"detail,nets={nnets}"] if detail else []
     desp = out or cache.design_path(dcp, routing, f"paths={npaths}", *dkey)
     full = cache.design_path(dcp, True, f"paths={npaths}")
-    if not out and not detail:
-        # an export with routing, or with detail, has it all
-        for alt in [full] + [cache.design_path(dcp, True, f"paths={npaths}", f"detail,nets={nnets}")]:
-            if not os.path.exists(desp) and os.path.exists(alt):
-                desp = alt
+    if not out and not detail and not os.path.exists(desp) and os.path.exists(full):
+        # an export with routing has it all (a detail export is not reused here:
+        # a plain render must not pick up the detail data)
+        desp = full
     refresh = getattr(a, "refresh", False)
     if refresh or not os.path.exists(desp) or not os.path.exists(devp):
         args = ["design", os.path.abspath(dcp), desp]
@@ -107,6 +107,8 @@ def _export_quartus(a, project):
     from . import altera
     if not project.netlist:
         quartus.read(project)                   # says what is missing
+    if getattr(a, "detail", False):
+        _log("warning: --detail is for Vivado checkpoints; ignored for a Quartus project")
     out = getattr(a, "output_design", None)
     stamps = [os.stat(p).st_mtime_ns for p in (project.fit, project.sta) if p]
     desp = out or cache.design_path(project.netlist, "quartus", altera.MAP, *stamps)
@@ -214,7 +216,7 @@ def cmd_export(a):
 
 
 def cmd_device(a):
-    path = a.output or cache.device_path(a.part)
+    path = os.path.abspath(a.output) if a.output else cache.device_path(a.part)
     if a.refresh or not os.path.exists(path):
         _atomic_run([path], ["device", a.part, path], a, "")
     print(path)
@@ -294,8 +296,8 @@ def cmd_crosscheck(a):
         rep["info"]["prjxray_db"] = f"{fam} ({dbpart})"
         rep.update(xc.compare(dev, des, fasm, fam, const))
     else:
-        rep["info"]["bitstream_check"] = (f"no Project X-Ray database for {arch or '?'} {des.part}: "
-                                          "only Vivado-internal checks")
+        rep["info"]["bitstream_check"] = (f"no Project X-Ray database for {arch or '?'} {des.part} "
+                                          "(--db-root or $IMPLVIEW_PRJXRAY_DB): only Vivado-internal checks")
     if a.nextpnr:
         from . import openflow
         from .design import load_design as _ld
@@ -405,7 +407,7 @@ def main(argv=None):
     source(p)
     p.add_argument("-O", "--outdir", default="crosscheck", help="report directory")
     p.add_argument("--bit", help="bitstream of the checkpoint (default: written by Vivado)")
-    p.add_argument("--db-root", help="prjxray-db root (default: $IMPLVIEW_PRJXRAY_DB or known places)")
+    p.add_argument("--db-root", help="prjxray-db root (default: $IMPLVIEW_PRJXRAY_DB)")
     p.add_argument("--nextpnr", metavar="JSON", help="nextpnr-xilinx --write JSON of the same "
                    "design: compare the open-flow implementation (needs --nextpnr-fasm)")
     p.add_argument("--nextpnr-fasm", metavar="FASM", help="nextpnr-xilinx --fasm output")
@@ -427,7 +429,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     try:
         a.func(a)
-    except (vivado.VivadoError, quartus.QuartusError, FileNotFoundError, RuntimeError) as e:
+    except (vivado.VivadoError, quartus.QuartusError, FileNotFoundError, CrosscheckError) as e:
         raise SystemExit(f"implview: {e}")
 
 
